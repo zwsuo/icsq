@@ -1,0 +1,12 @@
+[package]
+name = "icsq"
+version = "1.1.2"
+edition = "2021"
+description = "Query .ics calendar files from the command line"
+license = "MIT"
+
+[dependencies]
+
+[profile.release]
+opt-level = 2
+strip = true

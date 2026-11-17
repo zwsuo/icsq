@@ -1,0 +1,9 @@
+# Rust 构建产物
+/target
+
+# AUR / makepkg 产物（在 packaging/ 里本地测试时生成）
+*.pkg.tar.*
+/packaging/pkg/
+/packaging/src/
+/packaging/*.tar.gz
+/packaging/.SRCINFO
