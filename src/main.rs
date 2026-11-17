@@ -18,6 +18,7 @@ const HELP: &str = r#"icsq — 读取并查询 .ics 日历 / 日志 / 待办文�
 默认扫描当前目录下的 *.ics（不递归）。
 位置参数如果是已存在的文件/目录，会作为输入；以 .ics 结尾但不存在则会报错；
 其余位置参数作为关键字。多个关键字默认是 AND，加 --any 改为 OR。
+如果某个值本身以 - 开头，请用 --选项=值 的形式，例如 -k=--full。
 
 选项:
   -d, --dir <PATH>         要扫描的目录，或单个 .ics 文件（可重复，默认 .）
@@ -53,13 +54,17 @@ const HELP: &str = r#"icsq — 读取并查询 .ics 日历 / 日志 / 待办文�
       --count              只输出匹配条数
 
   -o, --output <FMT>       table | block | json | tsv（默认 table）
-      --full               等价于 --output block（保留换行、不截断）
+      --full               输出所有非空字段的完整内容（= -f all + block）；
+                           显式指定 -f 时以 -f 为准
       --table              强制 table 输出
       --json               等价于 --output json
       --tsv                等价于 --output tsv
-      --no-header          不输出表头
-      --max-width <N>      table 单元格自动换行宽度（默认 80）
-      --truncate           不换行，超宽内容用 … 截断（单行表格）
+      --no-header          不输出字段名
+      --wide               横向表格：字段作列，一行一条记录
+                           （默认纵向：每条记录一块，字段一行一个）
+      --wrap               超宽值按 --max-width 自动换行（保留正文段落）
+      --max-width <N>      折行宽度 / 截断上限（默认 80）
+      --truncate           超宽值用 … 截断成一行
 
   -h, --help               显示帮助
   -V, --version            显示版本
@@ -75,8 +80,9 @@ const HELP: &str = r#"icsq — 读取并查询 .ics 日历 / 日志 / 待办文�
 
 字段:
   type, title, summary, description, categories, dtstart, dtend, due,
-  created, last-modified, dtstamp, status, class, url, location, geo,
-  sequence, uid, attach, file
+  completed, created, last-modified, dtstamp, status, priority,
+  percent-complete, class, url, location, geo, sequence, duration,
+  rrule, organizer, attendee, uid, attach, file
   也可以直接写任意 ICS 属性名，如 x-custom、rrule。
 
 示例:
@@ -127,7 +133,9 @@ struct Opts {
     full: bool,
     no_header: bool,
     max_width: usize,
+    wrap: bool,
     truncate: bool,
+    wide: bool,
     count: bool,
     list_fields: bool,
 }
@@ -159,7 +167,9 @@ impl Default for Opts {
             full: false,
             no_header: false,
             max_width: 80,
+            wrap: false,
             truncate: false,
+            wide: false,
             count: false,
             list_fields: false,
         }
@@ -174,6 +184,7 @@ const ALL_FIELDS: &[&str] = &[
     "dtstart",
     "dtend",
     "due",
+    "completed",
     "created",
     "last-modified",
     "dtstamp",
@@ -182,10 +193,16 @@ const ALL_FIELDS: &[&str] = &[
     "categories",
     "location",
     "status",
+    "priority",
+    "percent-complete",
     "class",
     "url",
     "geo",
     "sequence",
+    "duration",
+    "rrule",
+    "organizer",
+    "attendee",
     "attach",
     "file",
 ];
@@ -255,7 +272,14 @@ fn run() -> Result<(), String> {
             "-r" | "--recursive" => opts.recursive = true,
             "-f" | "--field" => {
                 let v = take(&args, &mut i, &inline, &flag)?;
-                for f in split_list(&v) {
+                let list = split_list(&v);
+                if list.is_empty() {
+                    return Err("-f/--field 需要至少一个字段名".to_string());
+                }
+                for f in list {
+                    if f.starts_with('-') {
+                        return Err(format!("-f/--field: 无效字段 {f:?}"));
+                    }
                     if f.eq_ignore_ascii_case("all") {
                         opts.fields.extend(ALL_FIELDS.iter().map(|s| s.to_string()));
                     } else {
@@ -356,6 +380,8 @@ fn run() -> Result<(), String> {
             "--tsv" => opts.output = Output::Tsv,
             "--no-header" => opts.no_header = true,
             "--truncate" => opts.truncate = true,
+            "--wrap" => opts.wrap = true,
+            "--wide" | "--horizontal" => opts.wide = true,
             "--max-width" => {
                 let v = take(&args, &mut i, &inline, &flag)?;
                 opts.max_width = v
@@ -380,12 +406,20 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if opts.wrap && opts.truncate {
+        return Err("--wrap 与 --truncate 不能同时使用".to_string());
+    }
+
     if opts.inputs.is_empty() {
         opts.inputs.push(PathBuf::from("."));
     }
 
     if opts.fields.is_empty() {
-        opts.fields = DEFAULT_FIELDS.iter().map(|s| s.to_string()).collect();
+        opts.fields = if opts.full {
+            ALL_FIELDS.iter().map(|s| s.to_string()).collect()
+        } else {
+            DEFAULT_FIELDS.iter().map(|s| s.to_string()).collect()
+        };
     }
     dedup(&mut opts.fields);
 
@@ -491,10 +525,29 @@ fn take(
     if let Some(v) = inline {
         return Ok(v.clone());
     }
+    if let Some(next) = args.get(*i + 1) {
+        if looks_like_option(next) {
+            return Err(format!(
+                "{flag} 缺少参数（下一个参数 {next} 是选项；如果它本来就是值，请写成 {flag}={next}）"
+            ));
+        }
+    }
     *i += 1;
     args.get(*i)
         .cloned()
         .ok_or_else(|| format!("{flag} 需要一个参数"))
+}
+
+/// 判断一个 token 是否像选项，用于避免 `-f --full` 这种把选项当成参数值的情况。
+/// 注意 `-7d`、`+1w` 这类相对日期不算选项。
+fn looks_like_option(s: &str) -> bool {
+    if s == "--" || s.starts_with("--") {
+        return true;
+    }
+    matches!(
+        s,
+        "-d" | "-r" | "-f" | "-k" | "-v" | "-t" | "-n" | "-o" | "-F" | "-h" | "-V"
+    )
 }
 
 fn split_list(s: &str) -> Vec<String> {
@@ -555,15 +608,22 @@ fn print_field_list() {
         ("dtstart", "开始时间（VJOURNAL/VEVENT）"),
         ("dtend", "结束时间"),
         ("due", "VTODO 截止时间"),
+        ("completed", "VTODO 完成时间"),
         ("created", "创建时间"),
         ("last-modified", "最后修改时间"),
         ("dtstamp", "DTSTAMP"),
         ("status", "STATUS"),
+        ("priority", "PRIORITY"),
+        ("percent-complete", "PERCENT-COMPLETE"),
         ("class", "CLASS"),
         ("url", "URL"),
         ("location", "LOCATION"),
         ("geo", "GEO"),
         ("sequence", "SEQUENCE"),
+        ("duration", "DURATION"),
+        ("rrule", "重复规则"),
+        ("organizer", "组织者"),
+        ("attendee", "参与者"),
         ("uid", "UID"),
         ("attach", "附件摘要（文件名、类型、大小），不输出 base64"),
     ];
@@ -1564,6 +1624,63 @@ fn attach_summary(item: &Item) -> String {
 // ---------------------------------------------------------------------------
 
 fn print_table(items: &[Item], opts: &Opts) {
+    if opts.wide {
+        print_table_wide(items, opts);
+    } else {
+        print_table_vertical(items, opts);
+    }
+}
+
+/// 纵向表格：每条记录一块，字段一行一个，字段名左对齐。
+fn print_table_vertical(items: &[Item], opts: &Opts) {
+    let show_heading = items.len() > 1;
+    let fields: Vec<&String> = opts
+        .fields
+        .iter()
+        .filter(|f| !(show_heading && f.as_str() == "file"))
+        .collect();
+    let label_width = fields
+        .iter()
+        .map(|f| display_width(&header_name(f)))
+        .max()
+        .unwrap_or(0);
+
+    for (idx, item) in items.iter().enumerate() {
+        if idx > 0 {
+            println!();
+        }
+        if show_heading {
+            println!("[{}] {}", idx + 1, item.file);
+        }
+        for field in fields.iter().copied() {
+            let raw = raw_field(item, field);
+            if raw.trim().is_empty() {
+                continue;
+            }
+            let label = header_name(field);
+            let lines = if opts.truncate {
+                vec![sanitize_cell(&raw, opts.max_width)]
+            } else if opts.wrap {
+                cell_lines(&raw, opts.max_width)
+            } else {
+                vec![flatten_cell(&raw)]
+            };
+            let indent = label_width + 2;
+            for (line_idx, line) in lines.iter().enumerate() {
+                if opts.no_header {
+                    println!("{line}");
+                } else if line_idx == 0 {
+                    pad_print(&label, label_width, false);
+                    println!("{line}");
+                } else {
+                    println!("{:indent$}{line}", "", indent = indent);
+                }
+            }
+        }
+    }
+}
+
+fn print_table_wide(items: &[Item], opts: &Opts) {
     let headers: Vec<String> = opts.fields.iter().map(|f| header_name(f)).collect();
     let rows: Vec<Vec<Vec<String>>> = items
         .iter()
@@ -1574,8 +1691,10 @@ fn print_table(items: &[Item], opts: &Opts) {
                     let raw = raw_field(item, f);
                     if opts.truncate {
                         vec![sanitize_cell(&raw, opts.max_width)]
-                    } else {
+                    } else if opts.wrap {
                         cell_lines(&raw, opts.max_width)
+                    } else {
+                        vec![flatten_cell(&raw)]
                     }
                 })
                 .collect()
@@ -1736,25 +1855,21 @@ fn wrap_line(line: &str, max_width: usize) -> Vec<String> {
     out
 }
 
-fn sanitize_cell(s: &str, max_width: usize) -> String {
+/// 把多行内容压成单行：换行和制表符折叠为空格，连续空白合并。
+fn flatten_cell(s: &str) -> String {
     let mut one_line = String::with_capacity(s.len());
     let mut pending_space = false;
     for c in s.chars() {
         match c {
             '\r' => {}
-            '\n' => {
-                if !one_line.is_empty() {
-                    pending_space = true;
-                }
-            }
-            '\t' => {
+            '\n' | '\t' => {
                 if !one_line.is_empty() {
                     pending_space = true;
                 }
             }
             _ => {
                 if pending_space {
-                    if !one_line.ends_with(' ') && !one_line.ends_with('⏎') {
+                    if !one_line.ends_with(' ') {
                         one_line.push(' ');
                     }
                     pending_space = false;
@@ -1763,8 +1878,12 @@ fn sanitize_cell(s: &str, max_width: usize) -> String {
             }
         }
     }
-    let trimmed = one_line.trim();
-    truncate_width(trimmed, max_width)
+    one_line.trim().to_string()
+}
+
+fn sanitize_cell(s: &str, max_width: usize) -> String {
+    let trimmed = flatten_cell(s);
+    truncate_width(&trimmed, max_width)
 }
 
 fn truncate_width(s: &str, max_width: usize) -> String {
@@ -1828,6 +1947,10 @@ fn print_block(items: &[Item], opts: &Opts) {
         }
         println!("[{}] {}", idx + 1, item.file);
         for field in &opts.fields {
+            if field == "file" {
+                // 标题行已经显示文件名，避免重复
+                continue;
+            }
             let value = raw_field(item, field);
             let value = value.trim_matches(|c| c == '\n' || c == '\r');
             if value.trim().is_empty() {
@@ -2134,6 +2257,25 @@ END:VCALENDAR
             cell_lines("第一段\n\n第二段", 80),
             vec!["第一段", "", "第二段"]
         );
+    }
+
+    #[test]
+    fn flattens_cell_to_single_line() {
+        assert_eq!(flatten_cell("第一段\n\n第二段"), "第一段 第二段");
+        assert_eq!(flatten_cell("a\r\n\tb  c"), "a b  c");
+        assert_eq!(flatten_cell("  前后空白  "), "前后空白");
+        assert_eq!(sanitize_cell("abcdefghij", 6), "abcde…");
+    }
+
+    #[test]
+    fn detects_option_tokens() {
+        assert!(looks_like_option("--full"));
+        assert!(looks_like_option("--to"));
+        assert!(looks_like_option("-f"));
+        assert!(!looks_like_option("-7d"));
+        assert!(!looks_like_option("+1w"));
+        assert!(!looks_like_option("涵涵"));
+        assert!(!looks_like_option("-foo"));
     }
 
     #[test]

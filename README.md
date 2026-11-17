@@ -44,8 +44,10 @@ icsq 会议.ics                          # 位置参数：直接传文件
 icsq -d 会议.ics                       # -d 也接受文件
 icsq -F 会议.ics                       # 或用 --file 显式指定
 icsq 会议.ics -k 议程 -f dtstart,title,description --full
-icsq 会议.ics -f description           # 自动换行显示全文
-icsq 会议.ics -f description --max-width 40   # 指定换行宽度
+icsq 会议.ics -f description           # 纵向显示，内容完整
+icsq 会议.ics -f description --wrap    # 按 --max-width 自动换行
+icsq 会议.ics -f description --wrap --max-width 40   # 指定换行宽度
+icsq 会议.ics -f dtstart,title --wide  # 横向表格：一行一条记录
 ```
 
 一次读多个文件，或文件与目录混用：
@@ -93,10 +95,12 @@ icsq -d ~/Downloads/af77c523-db64-4ae9-bed6-09ba340ebd6b --last 7d
 | `-n, --limit N` | 限制条数 |
 | `--count` | 只输出匹配数量 |
 | `-o, --output FMT` | `table` / `block` / `json` / `tsv` |
-| `--full` | 等价于 block 输出：不截断、保留换行 |
-| `--max-width N` | 表格单元格自动换行宽度，默认 80 |
-| `--truncate` | 关闭换行，超宽内容用 `…` 截断成单行 |
-| `--no-header` | 不输出表头 |
+| `--full` | 输出所有非空字段的完整内容（`-f all` + block）；显式 `-f` 时只输出指定字段 |
+| `--max-width N` | `--wrap` 的折行宽度，也是 `--truncate` 的上限，默认 80 |
+| `--wrap` | 超宽值按 `--max-width` 自动换行，保留正文段落 |
+| `--truncate` | 超宽值用 `…` 截断成一行（与 `--wrap` 互斥） |
+| `--wide` | 横向表格：字段作列、一行一条记录（默认是纵向） |
+| `--no-header` | 不输出字段名 |
 
 ## 字段
 
@@ -108,7 +112,7 @@ icsq -d ~/Downloads/af77c523-db64-4ae9-bed6-09ba340ebd6b --last 7d
 - `attach`：附件摘要（文件名、类型、估算大小），不会输出 base64
 - `file`：来源文件名
 - `type`：`event` / `journal` / `todo`
-- 其余：`dtstart,dtend,due,created,last-modified,dtstamp,status,class,url,location,geo,sequence,uid`
+- 其余：`dtstart,dtend,due,completed,created,last-modified,dtstamp,status,priority,percent-complete,class,url,location,geo,sequence,duration,rrule,organizer,attendee`
 - 也可以直接写任意属性名，如 `rrule`、`x-custom`
 
 `-f all` 展开为上面所有常用字段。
@@ -134,8 +138,8 @@ icsq -d ~/Downloads/af77c523-db64-4ae9-bed6-09ba340ebd6b --last 7d
 
 ## 输出
 
-- `table`：对齐的表格，自动按 CJK 宽字符计算列宽。**单元格内容会按 `--max-width` 自动换行，不再截断**；显式换行（如描述里的分段）会保留。需要旧的一行式省略号效果时加 `--truncate`。
-- `block`（`--full`）：每条一块，保留正文换行。
+- `table`：默认**纵向布局**，每条记录一块，字段一行一个，字段名左对齐。内容完整不截断，正文里的换行和制表符折叠为空格；多条记录之间用空行分隔，并显示 `[序号] 文件名`。加 `--wide` 可切回字段作列的横向表格；加 `--wrap` 按 `--max-width` 自动换行；加 `--truncate` 用 `…` 截断超宽值。
+- `block`（`--full`）：每条一块，保留正文换行；`--full` 未配合 `-f` 时会输出所有非空字段（`-f all`），适合快速查看一条记录的全部信息。
 - `json`：对象数组，字段名为 key，适合再用 `jq` 处理。
 - `tsv`：制表符分隔，换行转义为 `\n`，适合导入表格或脚本。
 
