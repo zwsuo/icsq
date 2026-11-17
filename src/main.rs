@@ -62,6 +62,7 @@ const HELP: &str = r#"icsq — 读取并查询 .ics 日历 / 日志 / 待办文�
       --no-header          不输出字段名
       --wide               横向表格：字段作列，一行一条记录
                            （默认纵向：每条记录一块，字段一行一个）
+      --raw                只输出字段值，不输出字段名和文件名
       --wrap               超宽值按 --max-width 自动换行（保留正文段落）
       --max-width <N>      折行宽度 / 截断上限（默认 80）
       --truncate           超宽值用 … 截断成一行
@@ -136,6 +137,7 @@ struct Opts {
     wrap: bool,
     truncate: bool,
     wide: bool,
+    raw: bool,
     count: bool,
     list_fields: bool,
 }
@@ -170,6 +172,7 @@ impl Default for Opts {
             wrap: false,
             truncate: false,
             wide: false,
+            raw: false,
             count: false,
             list_fields: false,
         }
@@ -382,6 +385,7 @@ fn run() -> Result<(), String> {
             "--truncate" => opts.truncate = true,
             "--wrap" => opts.wrap = true,
             "--wide" | "--horizontal" => opts.wide = true,
+            "--raw" | "--values-only" => opts.raw = true,
             "--max-width" => {
                 let v = take(&args, &mut i, &inline, &flag)?;
                 opts.max_width = v
@@ -503,6 +507,11 @@ fn run() -> Result<(), String> {
     // 输出
     if opts.count {
         println!("{}", items.len());
+        return Ok(());
+    }
+
+    if opts.raw {
+        print_raw(&items, &opts);
         return Ok(());
     }
 
@@ -1622,6 +1631,38 @@ fn attach_summary(item: &Item) -> String {
 // ---------------------------------------------------------------------------
 // 输出
 // ---------------------------------------------------------------------------
+
+/// 只输出字段值，不输出字段名、序号和文件名。
+fn print_raw(items: &[Item], opts: &Opts) {
+    let mut printed = false;
+    for item in items {
+        let mut lines: Vec<String> = Vec::new();
+        for field in &opts.fields {
+            let raw = raw_field(item, field);
+            let value = raw.trim_matches(|c| c == '\n' || c == '\r');
+            if value.trim().is_empty() {
+                continue;
+            }
+            if opts.truncate {
+                lines.push(sanitize_cell(value, opts.max_width));
+            } else if opts.wrap {
+                lines.extend(cell_lines(value, opts.max_width));
+            } else {
+                lines.extend(value.lines().map(|l| l.to_string()));
+            }
+        }
+        if lines.is_empty() {
+            continue;
+        }
+        if printed {
+            println!();
+        }
+        for line in lines {
+            println!("{line}");
+        }
+        printed = true;
+    }
+}
 
 fn print_table(items: &[Item], opts: &Opts) {
     if opts.wide {

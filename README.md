@@ -45,6 +45,7 @@ icsq -d 会议.ics                       # -d 也接受文件
 icsq -F 会议.ics                       # 或用 --file 显式指定
 icsq 会议.ics -k 议程 -f dtstart,title,description --full
 icsq 会议.ics -f description           # 纵向显示，内容完整
+icsq 会议.ics -f summary --raw         # 只输出值，不带字段名
 icsq 会议.ics -f description --wrap    # 按 --max-width 自动换行
 icsq 会议.ics -f description --wrap --max-width 40   # 指定换行宽度
 icsq 会议.ics -f dtstart,title --wide  # 横向表格：一行一条记录
@@ -100,6 +101,7 @@ icsq -d ~/Downloads/af77c523-db64-4ae9-bed6-09ba340ebd6b --last 7d
 | `--wrap` | 超宽值按 `--max-width` 自动换行，保留正文段落 |
 | `--truncate` | 超宽值用 `…` 截断成一行（与 `--wrap` 互斥） |
 | `--wide` | 横向表格：字段作列、一行一条记录（默认是纵向） |
+| `--raw` | 只输出字段值，不输出字段名、序号和文件名（别名 `--values-only`） |
 | `--no-header` | 不输出字段名 |
 
 ## 字段
@@ -139,6 +141,7 @@ icsq -d ~/Downloads/af77c523-db64-4ae9-bed6-09ba340ebd6b --last 7d
 ## 输出
 
 - `table`：默认**纵向布局**，每条记录一块，字段一行一个，字段名左对齐。内容完整不截断，正文里的换行和制表符折叠为空格；多条记录之间用空行分隔，并显示 `[序号] 文件名`。加 `--wide` 可切回字段作列的横向表格；加 `--wrap` 按 `--max-width` 自动换行；加 `--truncate` 用 `…` 截断超宽值。
+- `--raw`：只输出字段值，每行一个，不带字段名、序号和文件名；多条记录之间空一行。适合 `icsq -f description --raw | ...` 这类管道处理。
 - `block`（`--full`）：每条一块，保留正文换行；`--full` 未配合 `-f` 时会输出所有非空字段（`-f all`），适合快速查看一条记录的全部信息。
 - `json`：对象数组，字段名为 key，适合再用 `jq` 处理。
 - `tsv`：制表符分隔，换行转义为 `\n`，适合导入表格或脚本。
