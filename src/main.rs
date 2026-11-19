@@ -61,7 +61,7 @@ const HELP: &str = r#"icsq — 读取并查询 .ics 日历 / 日志 / 待办文�
       --tsv                等价于 --output tsv
       --no-header          不输出字段名
       --wide               横向表格：字段作列，一行一条记录
-                           （默认纵向：每条记录一块，字段一行一个）
+                           （默认纵向：每条记录一块，字段一行一个，保留原换行）
       --raw                只输出字段值，不输出字段名和文件名
       --wrap               超宽值按 --max-width 自动换行（保留正文段落）
       --max-width <N>      折行宽度 / 截断上限（默认 80）
@@ -1704,7 +1704,7 @@ fn print_table_vertical(items: &[Item], opts: &Opts) {
             } else if opts.wrap {
                 cell_lines(&raw, opts.max_width)
             } else {
-                vec![flatten_cell(&raw)]
+                value_lines(&raw)
             };
             let indent = label_width + 2;
             for (line_idx, line) in lines.iter().enumerate() {
@@ -1805,6 +1805,16 @@ fn pad_print(s: &str, width: usize, last: bool) {
         }
         print!("  ");
     }
+}
+
+/// 保留内容原有的换行结构：只规范化换行符并去掉行尾空白，不合并行。
+fn value_lines(s: &str) -> Vec<String> {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim_matches('\n');
+    trimmed
+        .split('\n')
+        .map(|line| line.trim_end().to_string())
+        .collect()
 }
 
 /// 把单元格内容拆成多行：保留显式换行，超宽的行按显示宽度自动折行。
@@ -2306,6 +2316,15 @@ END:VCALENDAR
         assert_eq!(flatten_cell("a\r\n\tb  c"), "a b  c");
         assert_eq!(flatten_cell("  前后空白  "), "前后空白");
         assert_eq!(sanitize_cell("abcdefghij", 6), "abcde…");
+    }
+
+    #[test]
+    fn preserves_value_line_breaks() {
+        assert_eq!(value_lines("a\nb"), vec!["a", "b"]);
+        assert_eq!(value_lines("a\r\n\r\nb"), vec!["a", "", "b"]);
+        assert_eq!(value_lines("\na\n"), vec!["a"]);
+        assert_eq!(value_lines("a\tb"), vec!["a\tb"]);
+        assert_eq!(value_lines("a  \nb"), vec!["a", "b"]);
     }
 
     #[test]
